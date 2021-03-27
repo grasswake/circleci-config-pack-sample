@@ -1,0 +1,295 @@
+commands:
+    install_yarn_version:
+        description: Install specific Yarn version
+        steps:
+            - run:
+                command: |
+                    curl -o- -L https://yarnpkg.com/install.sh | bash -s -- --version 1.22.10
+                    echo 'export PATH="$HOME/.yarn/bin:$HOME/.config/yarn/global/node_modules/.bin:$PATH"' >> $BASH_ENV
+                name: Install specific Yarn version
+    notify_slack_fail:
+        steps:
+            - slack/notify:
+                custom: |
+                    {
+                      "text": "CircleCI job failed.",
+                      "blocks": [
+                        {
+                          "type": "header",
+                          "text": {
+                            "type": "plain_text",
+                            "text": "Job Failed. :red_circle:",
+                            "emoji": true
+                          }
+                        },
+                        {
+                          "type": "section",
+                          "fields": [
+                            {
+                              "type": "mrkdwn",
+                              "text": "*Job*: ${CIRCLE_JOB}"
+                            }
+                          ]
+                        },
+                        {
+                          "type": "section",
+                          "fields": [
+                            {
+                              "type": "mrkdwn",
+                              "text": "*Project*:\\n$CIRCLE_PROJECT_REPONAME"
+                            },
+                            {
+                              "type": "mrkdwn",
+                              "text": "*Branch*:\\n$CIRCLE_BRANCH"
+                            },
+                            {
+                              "type": "mrkdwn",
+                              "text": "*Author*:\\n$CIRCLE_USERNAME"
+                            }
+                          ],
+                          "accessory": {
+                            "type": "image",
+                            "image_url": "https://assets.brandfolder.com/otz5mn-bw4j2w-6jzqo8/original/circle-logo-badge-black.png",
+                            "alt_text": "CircleCI logo"
+                          }
+                        },
+                        {
+                          "type": "section",
+                          "fields": [
+                            {
+                              "type": "mrkdwn",
+                              "text": "*Mentions*:\\n$SLACK_PARAM_MENTIONS"
+                            }
+                          ]
+                        },
+                        {
+                          "type": "actions",
+                          "elements": [
+                            {
+                              "type": "button",
+                              "text": {
+                                "type": "plain_text",
+                                "text": "View Job"
+                              },
+                              "url": "${CIRCLE_BUILD_URL}"
+                            }
+                          ]
+                        }
+                      ]
+                    }
+                event: fail
+    notify_slack_pass:
+        steps:
+            - slack/notify:
+                custom: |
+                    {
+                      "text": "CircleCI job succeeded!",
+                      "blocks": [
+                        {
+                          "type": "header",
+                          "text": {
+                            "type": "plain_text",
+                            "text": "Job Succeeded. :white_check_mark:",
+                            "emoji": true
+                          }
+                        },
+                        {
+                          "type": "section",
+                          "fields": [
+                            {
+                              "type": "mrkdwn",
+                              "text": "*Job*: ${CIRCLE_JOB}"
+                            }
+                          ]
+                        },
+                        {
+                          "type": "section",
+                          "fields": [
+                            {
+                              "type": "mrkdwn",
+                              "text": "*Project*:\\n$CIRCLE_PROJECT_REPONAME"
+                            },
+                            {
+                              "type": "mrkdwn",
+                              "text": "*Branch*:\\n$CIRCLE_BRANCH"
+                                    },
+                                    {
+                              "type": "mrkdwn",
+                              "text": "*Commit*:\\n$CIRCLE_SHA1"
+                            },
+                            {
+                              "type": "mrkdwn",
+                              "text": "*Author*:\\n$CIRCLE_USERNAME"
+                            }
+                          ],
+                          "accessory": {
+                            "type": "image",
+                            "image_url": "https://assets.brandfolder.com/otz5mn-bw4j2w-6jzqo8/original/circle-logo-badge-black.png",
+                            "alt_text": "CircleCI logo"
+                          }
+                        },
+                        {
+                          "type": "actions",
+                          "elements": [
+                            {
+                              "type": "button",
+                              "text": {
+                                "type": "plain_text",
+                                "text": "View Job"
+                              },
+                              "url": "${CIRCLE_BUILD_URL}"
+                            }
+                          ]
+                        }
+                      ]
+                    }
+                event: pass
+    restore_node_modules_cache:
+        steps:
+            - restore_cache:
+                keys:
+                    - node_modules-{{ .Branch }}-packages-{{ checksum "yarn.lock" }}
+                name: Restore node_modules cache
+    restore_yarn_cache:
+        steps:
+            - restore_cache:
+                keys:
+                    - yarn-{{ .Branch }}-packages-{{ checksum "yarn.lock" }}
+                name: Restore Yarn cache
+    run_yarn_install:
+        description: Install dependencies
+        steps:
+            - run:
+                command: yarn install --frozen-lockfile
+                name: Install dependencies
+    save_node_modules_cache:
+        description: Save node_modules cache
+        steps:
+            - save_cache:
+                key: node_modules-{{ .Branch }}-packages-{{ checksum "yarn.lock" }}
+                name: Save node_modules cache
+                paths:
+                    - node_modules
+    save_yarn_cache:
+        description: Save Yarn cache
+        steps:
+            - save_cache:
+                key: yarn-{{ .Branch }}-packages-{{ checksum "yarn.lock" }}
+                name: Save Yarn cache
+                paths:
+                    - ~/.cache/yarn
+executors:
+    default:
+        docker:
+            - environment:
+                TZ: Asia/Tokyo
+              image: circleci/node:14.15.5
+        working_directory: ~/repo
+jobs:
+    deploy_dev:
+        executor: default
+        steps:
+            - checkout
+            - attach_workspace:
+                at: .
+            - aws-s3/sync:
+                arguments: --delete
+                aws-access-key-id: AWS_ACCESS_KEY_ID
+                aws-region: AWS_DEFAULT_REGION
+                aws-secret-access-key: AWS_SECRET_ACCESS_KEY
+                from: ./dist/
+                to: s3://buecketname
+            - aws-cli/setup:
+                aws-access-key-id: AWS_ACCESS_KEY_ID
+                aws-region: AWS_DEFAULT_REGION
+                aws-secret-access-key: AWS_SECRET_ACCESS_KEY
+                profile-name: default
+            - run:
+                command: |
+                    aws cloudfront create-invalidation --distribution-id "$CLOUDFRONT_DISTRIBUTION_ID" --paths '/*'
+                name: Restore CloudFront cache
+            - notify_slack_fail
+            - notify_slack_pass
+    deploy_prod:
+        executor: default
+        steps:
+            - checkout
+            - attach_workspace:
+                at: .
+            - aws-s3/sync:
+                arguments: --delete
+                aws-access-key-id: AWS_ACCESS_KEY_ID
+                aws-region: AWS_DEFAULT_REGION
+                aws-secret-access-key: AWS_SECRET_ACCESS_KEY
+                from: ./dist/
+                to: s3://buecketname
+            - aws-cli/setup:
+                aws-access-key-id: AWS_ACCESS_KEY_ID
+                aws-region: AWS_DEFAULT_REGION
+                aws-secret-access-key: AWS_SECRET_ACCESS_KEY
+                profile-name: default
+            - run:
+                command: |
+                    aws cloudfront create-invalidation --distribution-id "$CLOUDFRONT_DISTRIBUTION_ID" --paths '/*'
+                name: Restore CloudFront cache
+            - notify_slack_fail
+            - notify_slack_pass
+    prepare:
+        executor: default
+        steps:
+            - checkout
+            - install_yarn_version
+            - restore_yarn_cache
+            - restore_node_modules_cache
+            - run_yarn_install
+            - save_yarn_cache
+            - save_node_modules_cache
+            - run:
+                command: yarn build
+                name: Build
+            - persist_to_workspace:
+                paths:
+                    - node_modules
+                    - dist
+                root: .
+            - notify_slack_fail
+orbs:
+    aws-cli: circleci/aws-cli@1.3.1
+    aws-s3: circleci/aws-s3@2.0.0
+    slack: circleci/slack@4.3.1
+version: 2.1
+workflows:
+    develop:
+        jobs:
+            - prepare:
+                filters:
+                    branches:
+                        only:
+                            - develop
+            - deploy_dev:
+                filters:
+                    branches:
+                        only:
+                            - develop
+                requires:
+                    - prepare
+    release:
+        jobs:
+            - prepare:
+                filters:
+                    branches:
+                        only:
+                            - main
+                    tags:
+                        only: /^v[0-9]+\.[0-9]+\.[0-9]+$/
+            - deploy_prod:
+                filters:
+                    branches:
+                        only:
+                            - main
+                    tags:
+                        only: /^v[0-9]+\.[0-9]+\.[0-9]+$/
+                requires:
+                    - prepare
+    version: 2
+
